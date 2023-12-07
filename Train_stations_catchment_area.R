@@ -89,7 +89,7 @@ stations_interest_coord <- bind (stations_interest_coord,additional_stations)
 
 #Generate Isochrones
 
-api_key <- '5b3ce3597851110001cf62480a2c024e6d0c4102b7da8660e05e147d'
+api_key <- '__' #type your api key
 
 isochrones <- openrouteservice::ors_isochrones(
   locations = stations_interest_coord,
