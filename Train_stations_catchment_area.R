@@ -1,16 +1,16 @@
 libs <- c('viridis', 'sf','stars','tidyverse','raster',
-          'terra','ggplot2','osmdata','httr','leaflet','gt') #needed libraries
+          'terra','ggplot2','osmdata','httr','leaflet','gt','mapview','webshot') #needed libraries
 
 installed_libs <- libs %in% rownames(installed.packages())
 
 if(any(installed_libs == F)) {
   install.packages(libs[!installed_libs])
   } 
-getwd()
+
 invisible(lapply(libs,library,character.only = T))
 
 install.packages('remotes')
-
+webshot::install_phantomjs()
 
 remotes::install_github('GIScience/openrouteservice-r')
 
@@ -76,21 +76,22 @@ rail_buff_union <- st_union(rail_buffer)
 
 stations_online <- sf::st_intersection(train_stations_utm,rail_buff_union) #extract stations that fall within buffer
 
-stations_oi <- c('Abuja Metro','Kubwa','Kukwaba II','Gbazango')
+stations_oi <- c('Abuja Metro','Kukwaba II','Gbazango')
 
 stations_interest <-stations_online %>% dplyr::filter(name %in% stations_oi | wikidata == 'Q110556255') 
-stations_interest_wgs <- st_transform(stations_interest,crs=4326) #transform to a geographic coordinate system
+stations_interest <- st_transform(stations_interest,crs=4326) #transform to a geographic coordinate system
 
 stations_interest_coord <- as.data.frame(st_coordinates(stations_interest_wgs))
 
-additional_stations <- data.frame(name =c("Wupa","Gwagwa","Deidei","Kagini","Bassanjiwa"),X = c( 7.3948998,7.2851857,7.2872407,7.2921787,7.2824573),Y=c(9.0246825,9.0898296, 9.1061639, 9.1246465, 9.0136807)) 
+additional_stations <- data.frame(name =c("Wupa","Gwagwa","Deidei","Kagini","Bassanjiwa","Kukwaba I","Stadium","Airport"),X = c( 7.3948998,7.2851857,7.2872407,7.2921787,7.2824573,7.4410513,7.4517158,7.2723953),Y=c(9.0246825,9.0898296, 9.1061639, 9.1246465, 9.0136807, 9.0402465,9.0459078,9.0067099)) 
 additional_stations <- st_as_sf(additional_stations,coords = c("X","Y"), crs = 4326)
 
-stations_interest_coord <- bind (stations_interest_coord,additional_stations)
+
+stations_interest <- bind_rows(stations_interest,additional_stations)
 
 #Generate Isochrones
 
-api_key <- '***************' #type your api key
+api_key <- '5b3ce3597851110001cf62480a2c024e6d0c4102b7da8660e05e147d' #type your api key
 
 isochrones <- openrouteservice::ors_isochrones(
   locations = stations_interest_coord,
@@ -115,73 +116,72 @@ common_crs <- CRS('+init=epsg:4326')
 
 #create a buffer of 800m and 400m for walkshed
 station_buffer<- st_buffer(stations_interest,dist=800)
-station_buffer2 <- st_buffer(additional_stations, dist = 800)
+
 
 
 station_buffer_400 <- st_buffer(stations_interest, dist = 400)
-station_buffer2_400 <- st_buffer(additional_stations, dist = 400)
+
 
 #Populate a column with respective distances of each buffer for the purpose of displaying on legend
 station_buffer <- station_buffer %>%  mutate(distance_t = 800)
-station_buffer2 <-station_buffer2 %>%  mutate(distance_t = 800)
 
 
 station_buffer_400 <- station_buffer_400 %>%  mutate(distance_t = 400)
-station_buffer2_400 <- station_buffer2_400 %>%  mutate(distance_t =400)
 
-station_buffer <-st_transform(station_buffer,common_crs)
-station_buffer2 <st_transform(station_buffer2,common_crs)
 
-station_buffer_400 <-st_transform(station_buffer_400,common_crs)
-station_buffer_400 <- st_crs(station_buffer_400,station_buffer)
 
 st_crs(station_buffer) == st_crs(station_buffer_400)
 
 #Bind rows for walkshed
-buffer_merged <- bind_rows(station_buffer,stati,station_buffer2,station_buffer2_400)
+buffer_merged <- bind_rows(station_buffer,station_buffer_400)
 
 
 buffer_merged$distance_t <- factor(buffer_merged$distance_t)
 
 buffer_merged <-buffer_merged %>% 
-  select(name,distance_t)
+  dplyr::select(name,distance_t)
 
 buffer_grouped <-  buffer_merged %>% 
   dplyr::group_by(distance_t) 
 
 #Bind rows for zonal statistics
-buffer_merged2 <- bind_rows(station_buffer,station_buffer2)
 
 
 #carry out zonal statistics for number of people within each walk shed
-Zonal_sta <-terra::zonal(nga_pop,vect(buffer_merged2),sum,na.rm = T)
+Zonal_sta <-terra::zonal(nga_pop,vect(station_buffer),sum,na.rm = T)
 
-buffer_merged2$pop_dens <- Zonal_sta$NGA_ppp_v2c_2020_UNadj
-buffer_merged2 <- buffer_merged2 %>% select(name,pop_dens)
+station_buffer$pop_dens <- Zonal_sta$NGA_ppp_v2c_2020_UNadj
 
-buffer_merged2$pop_dens <- round(buffer_merged2$pop_dens)
+#Arrange names of station in order of route
+custom_order <- c("Abuja Metro", "Stadium", "Kukwaba I", "Kukwaba II", "Wupa", 
+                  "Idu", "Gwagwa", "Deidei", "Kagini", "Gbazango", 
+                  "Bassanjiwa", "Airport")
+
+station_buffer$name <- factor(station_buffer$name, levels = custom_order)
+
+station_buffer <- station_buffer %>% arrange(name) %>% 
+  dplyr::select(name,pop_dens)
+
+station_buffer$pop_dens <- round(station_buffer$pop_dens)
 
 #Make a table showing the population of people within each walk shed
-buffer_merged2_df <- st_drop_geometry(buffer_merged2)
+station_buffer_df <- st_drop_geometry(station_buffer)
 
 
-catchment_population <- gt(buffer_merged2_df) %>% 
+catchment_population <- gt(station_buffer_df) %>% 
   cols_label(name ="Station Name",
              pop_dens = "Catchment Population") %>% 
-  tab_header(title = "Abuja Rail Mass Transit",
-             subtitle = "How many people can take a 5 minute walk to a station?") %>% 
+  gt::tab_header(title = "Abuja Rail Mass Transit",
+             subtitle = md("*How many people can take a 5 minute walk to a station?*") )%>% 
   tab_options(data_row.padding = px(6),
               heading.align = 'left',
-              column_labels.background.color = '#114B5F',
+              column_labels.background.color = '#CBF3F0',
+              row_group.background.color = '#CBF3F0',
               heading.title.font.size = px(26),
-              ) %>% ab_style(
-                style = list(
-                  cell_text(font = "italic")
-                ),
-                locations = cells_title(groups = "subtitle")
-              ) %>% 
+              )  %>% 
   tab_source_note(md("*Author:@VictorA47*"))
 
+gtsave(catchment_population,"table3.png")
 
 col_pal <- leaflet::colorFactor("viridis",
                         domain = buffer_grouped$distance_t,
@@ -189,7 +189,7 @@ col_pal <- leaflet::colorFactor("viridis",
                         )
 #Create a walk shed for all stations on the light rail line
 
-leaflet(buffer_grouped) %>% 
+walkshed <- leaflet(buffer_grouped) %>% 
   
   addPolygons(fill = T,
               stroke = T,
@@ -203,3 +203,5 @@ leaflet(buffer_grouped) %>%
             labels = buffer_grouped$distance_t,
             title = "Area Within Walking Distance(m)",
             pal = pal_fact)
+
+mapview::mapshot(walkshed,file ="walksheds2.png")
